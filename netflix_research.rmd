@@ -1,0 +1,350 @@
+---
+title: "Drivers of Virality: Analysis of the Netflix Daily Top 10 in the US"
+author: "Team: Daryna Antoniuk, Maryna Ohinska, Nazar Mykhailyshchuk"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = TRUE)
+```
+
+## Data preparation
+
+```{r}
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(lubridate)
+library(moments) 
+
+netflix_data <- read_csv("netflix_with_imdb.csv")
+
+netflix_data <- netflix_data %>%
+  mutate(
+    Date_clean = as.Date(`As of`),
+    Month_num = month(Date_clean),
+    Season = case_when(
+      Month_num %in% c(12, 1, 2) ~ "Winter",
+      Month_num %in% c(3, 4, 5) ~ "Spring",
+      Month_num %in% c(6, 7, 8) ~ "Summer",
+      TRUE ~ "Fall"
+    ),
+    `Netflix Exclusive` = ifelse(is.na(`Netflix Exclusive`) | `Netflix Exclusive` == "", "No", `Netflix Exclusive`),
+    `Netflix Exclusive` = trimws(`Netflix Exclusive`)
+  )
+```
+
+## Descriptive Analysis
+
+Before testing hypotheses, we analyze the statistical properties of our main variable: `Viewership Score`.
+
+```{r descriptive_stats}
+
+desc_stats <- netflix_data %>%
+  summarise(
+    Mean = mean(`Viewership Score`, na.rm = TRUE),
+    Median = median(`Viewership Score`, na.rm = TRUE),
+    SD = sd(`Viewership Score`, na.rm = TRUE),
+    Min = min(`Viewership Score`, na.rm = TRUE),
+    Max = max(`Viewership Score`, na.rm = TRUE),
+    Skewness = skewness(`Viewership Score`, na.rm = TRUE),
+    Kurtosis = kurtosis(`Viewership Score`, na.rm = TRUE)
+  )
+
+knitr::kable(desc_stats, caption = "Descriptive Statistics for Viewership Score")
+```
+
+### Visualizing the Distribution
+
+```{r desc_viz, fig.cap="Distribution of Viewership Score"}
+ggplot(netflix_data, aes(x = `Viewership Score`)) +
+  geom_histogram(aes(y = ..density..), binwidth = 10, fill = "#E50914", alpha = 0.7, color = "black") +
+  geom_density(color = "blue", size = 1) +
+  labs(title = "Distribution of Viewership Score", 
+       subtitle = "Visual check for normality (Right-skewed)",
+       x = "Viewership Score", y = "Density") +
+  theme_minimal()
+```
+
+Discussion: The positive Skewness $3.8$ indicates a right-skewed distribution, meaning most titles have moderate popularity, while a few outliers have extremely high scores. High Kurtosis $19.4$ confirms the presence of heavy tails (outliers). This justifies our use of non-parametric tests later.
+
+### Normality Check
+
+```{r normality_check}
+set.seed(123)
+shapiro.test(sample(netflix_data$`Viewership Score`, 5000))
+```
+
+Before conducting formal hypothesis testing, we performed an Exploratory Data Analysis (EDA) to verify the assumptions required for statistical validity. Based on the distribution of the data and sample sizes, we changed some tests after conducting EDA.
+
+## Hypothesis 1: Impact of Exclusivity
+
+$$H_0: \mu_{\text{exclusive}} = \mu_{\text{non-exclusive}}$$ $$H_1: \mu_{\text{exclusive}} > \mu_{\text{non-exclusive}}$$
+
+Variables used:
+
+-   Netflix Exclusive (Yes/No)
+
+-   Viewership Score
+
+-   Days In Top 10
+
+```{r}
+
+ggplot(netflix_data, aes(x = `Netflix Exclusive`, y = `Viewership Score`, fill = `Netflix Exclusive`)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 1) +
+  labs(title = "Impact of Exclusivity on Viewership Score",
+       subtitle = "Comparing distribution of popularity scores",
+       y = "Viewership Score", x = "Is Netflix Exclusive?") +
+  theme_minimal() +
+  scale_fill_manual(values = c("No" = "gray", "Yes" = "#E50914"))
+```
+
+**Selected Test:** Wilcoxon Rank Sum Test (Mann-Whitney U Test)
+
+-   **Justification:** While a two-sample t-test was initially considered, the visual inspection of the `Viewership Score` variable (Figure 1) revealed a heavily right-skewed distribution with significant outliers. The Shapiro-Wilk test confirms that the data does not follow a normal distribution.
+
+-   **Reasoning:** The standard t-test is sensitive to outliers and relies on the assumption of normality. Therefore, we opted for the non-parametric **Wilcoxon Rank Sum Test**. Unlike the t-test, this method compares ranks (medians) rather than means, making it robust against skewed data and outliers typical of "viral" content.
+
+### Running Test
+
+```{r}
+test_h1 <- wilcox.test(`Viewership Score` ~ `Netflix Exclusive`, 
+                       data = netflix_data, 
+                       alternative = "greater") # check if Yes > No
+
+print(test_h1)
+
+netflix_data %>%
+  group_by(`Netflix Exclusive`) %>%
+  summarise(Median_Score = median(`Viewership Score`), Count = n())
+```
+
+### Conclusion
+
+The Wilcoxon Rank Sum Test was conducted to test whether Netflix Exclusive titles achieve higher viewership scores than non-exclusive titles.
+
+Descriptive statistics showed a slightly higher median for Exclusive content ($53$) compared to Non-Exclusive content ($44$). However, the Wilcoxon test returned a p-value of about $0.085$, which exceeds the standard significance level of $0.05$.
+
+Therefore, we fail to reject the null hypothesis: being a *Netflix Exclusive* does not have a statistically significant effect on viewership scores in the Daily Top 10. The observed difference in medians is likely due to random variation rather than a real underlying effect.
+
+## Hypothesis 2: Seasonality and Content Type
+
+$H_0$: Type and Season are independent
+
+$H_1$: Type and Season are dependent
+
+Variables:
+
+-   As of (converted to season)
+
+-   Type
+
+```{r}
+heatmap_viz <- netflix_data %>%
+  count(Season, Type)
+
+ggplot(heatmap_viz, aes(x = Season, y = Type, fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 5) +
+  scale_fill_gradient(low = "#ffcccc", high = "#E50914") +
+  labs(title = "Seasonality of Content Types",
+       subtitle = "Heatmap of frequencies",
+       fill = "Count") +
+  theme_minimal()
+```
+
+**Selected Test:** Pearson’s Chi-Squared Test of Independence (with filtering)
+
+-   **Justification:** The Chi-squared test requires that the expected frequency in each cell of the contingency table is at least 5. Our preliminary heatmap analysis (Figure 2) indicated that specific content categories, such as "Stand-Up Comedy" and "Concert/Performance," had extremely low counts across seasons (often \<5).
+
+-   **Data Adjustment:** Inclusion of these sparse categories would violate test assumptions and yield unreliable p-values. Consequently, we filtered the dataset to include only the two dominant categories: **"TV Show"** and **"Movie"**, ensuring sufficient sample size for a valid Chi-square analysis.
+
+### Running Test
+
+```{r}
+chisq_data <- netflix_data %>%
+  filter(Type %in% c("TV Show", "Movie")) %>%
+  filter(!is.na(Season))
+
+season_table <- table(chisq_data$Type, chisq_data$Season)
+
+test_h2 <- chisq.test(season_table)
+print(test_h2)
+
+print(season_table)
+```
+
+### Conclusion
+
+Pearson’s Chi-squared test of independence was used to examine whether the season of the year is associated with the type of content (Movie vs. TV Show) appearing in the Daily Top 10.
+
+The test produced a Chi-squared statistic of $\;8.46\;$ and a p-value of $\;0.0374\;$. Since the p-value is below the significance level of $0.05$, we reject the null hypothesis of independence.
+
+Thus, there is a statistically significant relationship between seasonality and content type. The distribution of movies versus TV shows varies across seasons rather than remaining constant. For example, the data indicates a stronger presence of TV shows during the Winter season compared to other periods.
+
+## Hypothesis 3: Content Quality vs. Popularity (IMDb Ratings)
+
+Let $\mu_R$ denote the mean IMDb rating of Top-10 titles. We consider titles with IMDb rating $\ge 8$ as high-quality.
+
+$H_0: \mu_R \ge 8$
+
+$H_1: \mu_R < 8$
+
+Variables:
+
+-   IMDb Rating
+
+-   Top-10 membership
+
+```{r}
+imdb_viz <- netflix_data %>% filter(!is.na(averageRating))
+
+ggplot(imdb_viz, aes(x = averageRating)) +
+  geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black", alpha = 0.7) +
+  geom_vline(aes(xintercept = 8.0), color = "red", linetype = "dashed", size = 1.5) +
+  annotate("text", x = 8.2, y = 500, label = "Threshold (8.0)", color = "red", angle = 90) +
+  labs(title = "Distribution of IMDb Ratings in Top 10",
+       subtitle = "Red line marks 'High Quality' threshold (8.0)",
+       x = "IMDb Rating (averageRating)", y = "Count") +
+  theme_minimal()
+```
+
+Assessing the normality of the averageRating variable. The code generates a Q-Q plot for visual confirmation and runs the Kolmogorov-Smirnov test as a formal statistical check, given the large sample size.
+
+```{r}
+qqnorm(imdb_viz$averageRating)
+qqline(imdb_viz$averageRating, col = "red", lwd = 2)
+
+ks.test(imdb_viz$averageRating, "pnorm", mean=mean(imdb_viz$averageRating), sd=sd(imdb_viz$averageRating))
+```
+
+**Selected Test:** Wilcoxon Signed Rank Test
+
+Since the Kolmogorov-Smirnov test indicated that the IMDb ratings are not normally distributed, we proceed with the **Wilcoxon Signed Rank Test**. This non-parametric alternative to the t-test is robust to non-normality. We test the one-sided alternative hypothesis ($H_1 :\mu <8$) to determine if the true location of the ratings distribution is statistically significantly lower than the 'high quality' threshold of $8.0$.
+
+### Running Test
+
+```{r}
+
+wilcox_result <- wilcox.test(imdb_viz$averageRating, mu = 8, alternative = "less")
+
+print(wilcox_result)
+
+cat("Actual Mean Rating:", mean(imdb_viz$averageRating))
+```
+
+Based on the Wilcoxon signed rank test ($p<2.2e−16$), we reject the null hypothesis. There is statistically significant evidence that the IMDb ratings for Netflix Top-10 titles are lower than the 'High Quality' threshold of 8.0. The actual mean rating of $6.64$ further confirms that the typical content in the Top 10 falls well below this standard.
+
+## Linear Regression
+
+We explicitly test if there is a linear relationship between Quality (`averageRating`) and Popularity (`Viewership Score`).
+
+$$Viewership Score = \beta_0 + \beta_1 \times averageRating + \epsilon$$
+
+```{r regression_analysis}
+
+regression_data <- netflix_data %>% filter(!is.na(averageRating))
+
+lm_model <- lm(`Viewership Score` ~ averageRating, data = regression_data)
+
+summary(lm_model)
+
+ggplot(netflix_data, aes(x = averageRating, y = `Viewership Score`)) +
+  geom_point(alpha = 0.3, color = "gray") +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(title = "Linear Regression: Rating vs. Score",
+       subtitle = paste("R-squared =", round(summary(lm_model)$r.squared, 4))) +
+  theme_minimal()
+```
+
+```{r}
+# Підготовка даних
+regression_data <- netflix_data %>% 
+  filter(!is.na(averageRating)) %>%
+  mutate(
+    # Створюємо dummy змінну: 1 якщо рейтинг 3.6, інакше 0
+    is_viral_outlier = ifelse(averageRating == 3.6, 1, 0)
+  )
+
+# Будуємо модель з двома змінними
+# Score = Beta0 + Beta1 * Rating + Beta2 * is_viral_outlier
+lm_model_dummy <- lm(`Viewership Score` ~ averageRating + is_viral_outlier, data = regression_data)
+
+summary(lm_model_dummy)
+
+# Графік
+ggplot(regression_data, aes(x = averageRating, y = `Viewership Score`)) +
+  # Малюємо всі точки, але підсвічуємо викид червоним
+  geom_point(aes(color = factor(is_viral_outlier)), alpha = 0.5) +
+  
+  # Додаємо лінію регресії ТІЛЬКИ для нормальних даних (де dummy == 0)
+  geom_smooth(data = subset(regression_data, is_viral_outlier == 0), 
+              method = "lm", color = "blue") +
+  
+  labs(title = "Linear Regression with Outlier Control",
+       subtitle = paste("Model accounts for the viral anomaly (Red dot)."),
+       color = "Is Outlier?") +
+  theme_minimal() +
+  scale_color_manual(values = c("gray", "red"))
+```
+
+By introducing a dummy variable (`is_viral_outlier`) to control for the specific anomaly, the model's explanatory power improved drastically, with the R-squared increasing to $0.514$.
+
+The results reveal two key findings:
+
+-   The 'Viral' Effect: The outlier variable is highly significant ($p<2e −16$) independent of the title's rating.
+
+The True Relationship: Crucially, after controlling for this outlier, a statistically significant positive relationship emerges between quality and popularity. The coefficient for averageRating ($28.04$) indicates that for typical Netflix content, a 1-point increase in IMDb rating corresponds to an increase of approximately 28 viewership points. This contradicts the initial analysis, showing that quality does drive popularity when anomalies are accounted for.
+
+## Logit Model
+
+Finally, we implement a **Logistic Regression (Logit Model)** to act as a classifier. We aim to predict whether a title is **Netflix Exclusive** based on its *Viewership Score* and *IMDb Rating*.
+
+We split the data into training (80%) and testing (20%) sets to evaluate the model's performance.
+
+```{r logit_model}
+logit_data <- netflix_data %>%
+  filter(!is.na(averageRating)) %>%
+  mutate(Exclusive_Binary = ifelse(`Netflix Exclusive` == "Yes", 1, 0))
+
+set.seed(123)
+sample_index <- sample(seq_len(nrow(logit_data)), size = 0.8 * nrow(logit_data))
+train_set <- logit_data[sample_index, ]
+test_set  <- logit_data[-sample_index, ]
+
+logit_model <- glm(Exclusive_Binary ~ `Viewership Score` + averageRating, 
+                   data = train_set, 
+                   family = binomial)
+
+summary(logit_model)
+
+test_set$Predicted_Prob <- predict(logit_model, test_set, type = "response")
+test_set$Predicted_Class <- ifelse(test_set$Predicted_Prob > 0.5, 1, 0)
+
+confusion_matrix <- table(Predicted = test_set$Predicted_Class, Actual = test_set$Exclusive_Binary)
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+
+print(confusion_matrix)
+cat("Model Accuracy:", round(accuracy, 4))
+```
+
+## General Discussion and Conclusion
+
+This study aimed to identify the statistical drivers of virality within the Netflix ecosystem by analyzing the US Daily Top 10 dataset. By testing hypotheses related to exclusivity, seasonality, and content quality, we arrived at several key insights regarding viewer behavior.
+
+Key Findings
+
+-   Exclusivity is Not a Guarantee of Virality. Contrary to the initial assumption that "Netflix Original" titles would inherently outperform licensed content, our analysis (Hypothesis 1) found no statistically significant difference in viewership scores between exclusive and non-exclusive titles (p\>0.05). This suggests that while the "Original" branding is a key marketing strategy for the platform, the audience’s decision to watch a title is driven more by the specific appeal of the content itself rather than its distribution status.
+
+-   Seasonality Influences Consumption Patterns. Our analysis confirmed a statistically significant relationship between the time of year and the type of content consumed (Hypothesis 2). Specifically, viewer preferences shift between Movies and TV Shows depending on the season, with a notable inclination towards episodic content (TV Shows) during the Winter months.
+
+-   Popularity and Critical Acclaim: A Complex Relationship. The Wilcoxon Signed Rank Test (Hypothesis 3) confirmed that the average Top 10 title does not meet the "high-quality" threshold of 8.0, sitting at a mean of 6.64. Initially, this suggested that quality is not a primary driver of virality.
+
+-   However, our Supplementary Regression Analysis revealed a hidden nuance. When controlling for "viral anomalies" (titles with low ratings but massive popularity), we found a strong positive correlation between rating and viewership (+28 points per star). This implies that while "trashy" viral hits exist, for the majority of the catalog, higher quality does indeed lead to better performance.
+
+Final Thought: The drivers of virality on Netflix are complex. To achieve a sustained presence in the Top 10, content generally benefits from higher quality (IMDb ratings), unless it achieves specific "viral" status through other means. Success is further optimized by aligning genres with seasonal demand (e.g., releasing TV shows in Winter).
