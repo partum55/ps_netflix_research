@@ -34,7 +34,11 @@ This project aims to statistically analyze the factors that contribute to a titl
 
 **Dataset Description**
 
-The primary dataset is a daily log of the Top 10 most popular titles on Netflix, containing 7,100 observations from April 2020 to March 2022. - Netflix Data: Includes variables such as Rank, Viewership Score, Days in Top 10, Netflix Exclusive status, and Type (Movie/TV Show). - IMDb Enrichment: To analyze the impact of content quality, we merged the Netflix data with IMDb datasets based on title. We successfully matched a subset of titles (N=699) to retrieve IMDb Rating and Genre.
+The primary dataset is a daily log of the Top 10 most popular titles on Netflix, containing 7,100 observations from April 2020 to March 2022.
+
+-   Netflix Data: Includes variables such as Rank, Viewership Score, Days in Top 10, Netflix Exclusive status, and Type (Movie/TV Show).
+
+-   IMDb Enrichment: To analyze the impact of content quality, we merged the Netflix data with IMDb datasets based on title. We successfully matched a subset of titles to retrieve IMDb Rating and Genre.
 
 ## Data preparation
 
